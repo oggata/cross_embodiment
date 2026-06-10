@@ -1,0 +1,634 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>人魚 A/B 比較デモ — Cross-Embodiment Transfer</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #060b14; color: #e0e0e0; font-family: 'Courier New', monospace; overflow: hidden; }
+
+#header {
+  position: fixed; top: 0; left: 0; right: 0; height: 44px; z-index: 20;
+  background: rgba(6,11,20,0.95); border-bottom: 1px solid #1a2a3a;
+  display: flex; align-items: center; padding: 0 20px; gap: 16px;
+}
+#header h1 { font-size: 13px; color: #7eb8ff; letter-spacing: 0.1em; flex: 1; }
+#drop-hint { font-size: 11px; color: #446688; }
+#drop-hint.loaded { color: #4eff9e; }
+
+#labels {
+  position: fixed; top: 44px; left: 0; right: 0; height: 28px; z-index: 20;
+  display: grid; grid-template-columns: 1fr 1fr;
+  background: rgba(6,11,20,0.9); border-bottom: 1px solid #0d1a28;
+}
+.label {
+  display: flex; align-items: center; justify-content: center;
+  font-size: 11px; letter-spacing: 0.12em; gap: 8px;
+}
+.label-a { color: #4a9eff; border-right: 1px solid #0d1a28; }
+.label-b { color: #ff6b6b; }
+.dot { width: 8px; height: 8px; border-radius: 50%; }
+.dot-a { background: #4a9eff; }
+.dot-b { background: #ff6b6b; }
+
+#divider {
+  position: fixed; top: 72px; bottom: 56px;
+  left: 50%; width: 1px; background: #1a2a3a; z-index: 15;
+}
+#divider-label {
+  position: fixed; top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  background: rgba(6,11,20,0.9); border: 1px solid #1a2a3a;
+  padding: 4px 10px; font-size: 10px; color: #446688;
+  letter-spacing: 0.08em; z-index: 16; white-space: nowrap;
+}
+
+#canvas-wrap {
+  position: fixed; top: 72px; left: 0; right: 0; bottom: 56px;
+}
+canvas { display: block; width: 100%; height: 100%; }
+
+#bottom {
+  position: fixed; bottom: 0; left: 0; right: 0; height: 56px; z-index: 20;
+  background: rgba(6,11,20,0.95); border-top: 1px solid #1a2a3a;
+  display: grid; grid-template-columns: repeat(6, 1fr); align-items: center;
+  padding: 0 16px; gap: 8px;
+}
+.stat { font-size: 10px; }
+.stat-label { color: #446688; margin-bottom: 1px; }
+.stat-value { font-size: 12px; font-weight: bold; }
+.stat-value.a { color: #4a9eff; }
+.stat-value.b { color: #ff6b6b; }
+
+#drop-overlay {
+  position: fixed; inset: 0; z-index: 100;
+  background: rgba(6,11,20,0.88);
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  gap: 16px; pointer-events: none; opacity: 0;
+  transition: opacity 0.2s;
+}
+#drop-overlay.visible { opacity: 1; pointer-events: all; }
+#drop-overlay .box {
+  border: 2px dashed #4a9eff; border-radius: 12px;
+  padding: 40px 60px; text-align: center;
+}
+#drop-overlay .box p { font-size: 14px; color: #7eb8ff; margin-bottom: 8px; }
+#drop-overlay .box small { font-size: 11px; color: #446688; }
+.file-btn {
+  padding: 6px 18px; font-size: 12px; letter-spacing: 0.06em;
+  border: 1px solid #2a5a8a; background: rgba(10,30,60,0.8);
+  color: #7eb8ff; cursor: pointer; border-radius: 4px;
+}
+.file-btn:hover { background: rgba(20,50,90,0.9); }
+
+#mode-btns {
+  position: fixed; bottom: 64px; left: 50%; transform: translateX(-50%);
+  display: flex; gap: 6px; z-index: 21;
+}
+.mbtn {
+  padding: 5px 16px; font-size: 11px; letter-spacing: 0.06em;
+  border: 1px solid #1a3a5a; background: rgba(6,11,20,0.9);
+  color: #7eb8ff; cursor: pointer; border-radius: 4px; transition: all 0.15s;
+}
+.mbtn.active { background: #1a3a5a; color: #fff; }
+.mbtn:hover:not(.active) { border-color: #2a5a8a; }
+</style>
+</head>
+<body>
+
+<div id="header">
+  <h1>CROSS-EMBODIMENT TRANSFER — 人魚 A/B 比較</h1>
+  <span id="drop-hint">▼ weights_A.json と weights_B.json をドロップして読み込む</span>
+</div>
+
+<div id="labels">
+  <div class="label label-a"><div class="dot dot-a"></div>条件A: 転移あり（Backbone凍結 + ActionExpert学習）</div>
+  <div class="label label-b"><div class="dot dot-b"></div>条件B: ベースライン（ランダム初期化）</div>
+</div>
+
+<div id="divider"></div>
+<div id="divider-label">VS</div>
+
+<div id="canvas-wrap"><canvas id="c"></canvas></div>
+
+<div id="mode-btns">
+  <button class="mbtn active" onclick="setTask(0)">待機</button>
+  <button class="mbtn" onclick="setTask(1)">水中游泳</button>
+  <button class="mbtn" onclick="setTask(2)">水面移動</button>
+</div>
+
+<div id="bottom">
+  <div class="stat"><div class="stat-label">arm_l  A/B</div>
+    <div><span class="stat-value a" id="s-arm-a">—</span> / <span class="stat-value b" id="s-arm-b">—</span></div></div>
+  <div class="stat"><div class="stat-label">tail_mid  A/B</div>
+    <div><span class="stat-value a" id="s-tail-a">—</span> / <span class="stat-value b" id="s-tail-b">—</span></div></div>
+  <div class="stat"><div class="stat-label">tail_tip  A/B</div>
+    <div><span class="stat-value a" id="s-ttip-a">—</span> / <span class="stat-value b" id="s-ttip-b">—</span></div></div>
+  <div class="stat"><div class="stat-label">hip_pitch  A/B</div>
+    <div><span class="stat-value a" id="s-hip-a">—</span> / <span class="stat-value b" id="s-hip-b">—</span></div></div>
+  <div class="stat"><div class="stat-label">water_depth</div>
+    <span class="stat-value a" id="s-wd">0.00</span></div>
+  <div class="stat"><div class="stat-label">phase</div>
+    <span class="stat-value a" id="s-ph">0.00</span></div>
+</div>
+
+<div id="drop-overlay">
+  <div style="display:flex;gap:20px;">
+    <div class="box" id="box-a">
+      <p style="color:#4a9eff;">条件A: weights_A.json</p>
+      <small>転移あり（Backbone凍結+ActionExpert学習済み）</small><br>
+      <button class="file-btn" onclick="document.getElementById('file-input-a').click()" style="margin-top:12px;">ファイルを選択</button>
+      <input type="file" id="file-input-a" accept=".json" style="display:none">
+    </div>
+    <div class="box" id="box-b">
+      <p style="color:#ff6b6b;">条件B: weights_B.json</p>
+      <small>ベースライン（ランダム初期化からフル学習済み）</small><br>
+      <button class="file-btn" onclick="document.getElementById('file-input-b').click()" style="margin-top:12px;">ファイルを選択</button>
+      <input type="file" id="file-input-b" accept=".json" style="display:none">
+    </div>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+// ============================================================
+// Renderer / Scene
+// ============================================================
+const canvas = document.getElementById('c');
+const wrap   = document.getElementById('canvas-wrap');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setPixelRatio(devicePixelRatio);
+renderer.shadowMap.enabled = true;
+
+function resize() {
+  const W = wrap.clientWidth, H = wrap.clientHeight;
+  renderer.setSize(W, H);
+  camera.aspect = W / H;
+  camera.updateProjectionMatrix();
+}
+
+const scene  = new THREE.Scene();
+scene.background = new THREE.Color(0x060b14);
+scene.fog = new THREE.Fog(0x060b14, 14, 30);
+
+const camera = new THREE.PerspectiveCamera(46, 1, 0.1, 100);
+camera.position.set(0, 1.4, 7.0);
+camera.lookAt(0, 0.8, 0);
+
+// Lights
+scene.add(new THREE.AmbientLight(0x1a2a44, 1.4));
+const sun = new THREE.DirectionalLight(0x88bbff, 1.3);
+sun.position.set(4, 8, 5); sun.castShadow = true;
+scene.add(sun);
+const fill = new THREE.PointLight(0x0055aa, 0.7, 20);
+fill.position.set(-4, 2, 3); scene.add(fill);
+const caustic = new THREE.PointLight(0x00ddaa, 0.4, 12);
+caustic.position.set(0, -1, 0); scene.add(caustic);
+
+// Floor (seabed)
+const floor = new THREE.Mesh(
+  new THREE.PlaneGeometry(30, 30),
+  new THREE.MeshStandardMaterial({ color: 0x091520 })
+);
+floor.rotation.x = -Math.PI / 2; floor.receiveShadow = true;
+scene.add(floor);
+scene.add(new THREE.GridHelper(30, 30, 0x0d1e2e, 0x0d1e2e));
+
+// Water surface
+const waterSurf = new THREE.Mesh(
+  new THREE.PlaneGeometry(30, 30),
+  new THREE.MeshStandardMaterial({ color: 0x0a3a5a, transparent: true, opacity: 0.28, side: THREE.DoubleSide })
+);
+waterSurf.rotation.x = -Math.PI / 2; waterSurf.position.y = 2.2;
+scene.add(waterSurf);
+
+// Scissor viewport divider line
+renderer.setScissorTest(true);
+
+// ============================================================
+// Materials
+// ============================================================
+const skinMat   = new THREE.MeshStandardMaterial({ color: 0x4a8be5, roughness: 0.5 });
+const darkMat   = new THREE.MeshStandardMaterial({ color: 0x2a5ca8, roughness: 0.5 });
+const scaleMatA = new THREE.MeshStandardMaterial({ color: 0x1a9e8f, roughness: 0.3, metalness: 0.2 });
+const scaleMatB = new THREE.MeshStandardMaterial({ color: 0x9e3a1a, roughness: 0.3, metalness: 0.2 });
+const finMatA   = new THREE.MeshStandardMaterial({ color: 0x0d7a6e, transparent: true, opacity: 0.8 });
+const finMatB   = new THREE.MeshStandardMaterial({ color: 0x7a2a0d, transparent: true, opacity: 0.8 });
+const eyeMat    = new THREE.MeshStandardMaterial({ color: 0xffffff });
+const hairMat   = new THREE.MeshStandardMaterial({ color: 0x2255aa, roughness: 0.9 });
+
+// ============================================================
+// Mermaid character builder
+// ============================================================
+function makeMermaid(side, scaleMat, finMat) {
+  const root = new THREE.Group();
+  root.position.set(side * 1.8, 0.9, 0);
+
+  // --- Upper body ---
+  const torso = new THREE.Mesh(new THREE.BoxGeometry(0.30, 0.42, 0.16), skinMat);
+  torso.position.y = 0.21; torso.castShadow = true;
+  root.add(torso);
+
+  // Head
+  const head = new THREE.Mesh(new THREE.BoxGeometry(0.21, 0.21, 0.21), skinMat);
+  head.position.y = 0.53; head.castShadow = true;
+  root.add(head);
+
+  // Hair (flowing)
+  const hair = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.28, 0.06), hairMat);
+  hair.position.set(0, 0.46, -0.10); root.add(hair);
+
+  // Eyes
+  [-0.055, 0.055].forEach(x => {
+    const e = new THREE.Mesh(new THREE.SphereGeometry(0.028, 6, 6), eyeMat);
+    e.position.set(x, 0.54, 0.105); root.add(e);
+  });
+
+  // Arms (shoulder pivot)
+  function makeArm(s) {
+    const g = new THREE.Group();
+    g.position.set(s * 0.20, 0.36, 0);
+    const upper = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.20, 0.07), skinMat);
+    upper.position.y = -0.10; upper.castShadow = true; g.add(upper);
+    const lower = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.18, 0.06), skinMat);
+    lower.position.y = -0.29; lower.castShadow = true; g.add(lower);
+    root.add(g);
+    return g;
+  }
+  const lArm = makeArm(-1);
+  const rArm = makeArm( 1);
+
+  // --- Lower body: fish tail (spine segments) ---
+  const segCount = 5;
+  const segData  = [
+    { len: 0.24, w: 0.20, h: 0.16, y: -0.12 },
+    { len: 0.20, w: 0.17, h: 0.13, y: -0.20 },
+    { len: 0.17, w: 0.14, h: 0.10, y: -0.17 },
+    { len: 0.13, w: 0.10, h: 0.07, y: -0.13 },
+    { len: 0.09, w: 0.06, h: 0.05, y: -0.09 },
+  ];
+
+  // Hip connector
+  const hipGroup = new THREE.Group();
+  hipGroup.position.y = 0.0;
+  root.add(hipGroup);
+
+  const segs = [];
+  let parent = hipGroup;
+  segData.forEach((d, i) => {
+    const g = new THREE.Group();
+    g.position.y = d.y;
+    const mesh = new THREE.Mesh(
+      new THREE.BoxGeometry(d.w, d.len, d.w * 0.7), scaleMat
+    );
+    mesh.castShadow = true; g.add(mesh);
+    parent.add(g);
+    segs.push(g);
+    parent = g;
+  });
+
+  // Tail fin (caudal)
+  const tailFin = new THREE.Group();
+  const tu = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.16, 0.03), finMat);
+  tu.position.y = 0.08; tailFin.add(tu);
+  const tl = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.12, 0.03), finMat);
+  tl.position.y = -0.06; tailFin.add(tl);
+  // horizontal flukes
+  [-1, 1].forEach(s => {
+    const fluke = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.04, 0.03), finMat);
+    fluke.position.set(s * 0.07, -0.02, 0);
+    fluke.rotation.z = s * 0.3; tailFin.add(fluke);
+  });
+  segs[segs.length - 1].add(tailFin);
+
+  // Dorsal fin
+  const dorsal = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.18, 0.09), finMat);
+  dorsal.position.set(0, 0.05, -0.09); root.add(dorsal);
+
+  return { root, torso, head, hair, lArm, rArm, hipGroup, segs, tailFin };
+}
+
+const mermaidA = makeMermaid(-1, scaleMatA, finMatA);
+const mermaidB = makeMermaid( 1, scaleMatB, finMatB);
+scene.add(mermaidA.root);
+scene.add(mermaidB.root);
+
+// ============================================================
+// Neural Net Inference (JS)
+// ============================================================
+let weightsA = null;  // pretrained (loaded from file)
+let weightsB = null;  // simulated "scratch" (random init)
+
+function relu(arr) {
+  return arr.map(v => Math.max(0, v));
+}
+function tanhArr(arr) {
+  return arr.map(v => Math.tanh(v));
+}
+function mv(W, b, x, out_dim, in_dim) {
+  const out = new Float32Array(out_dim);
+  for (let i = 0; i < out_dim; i++) {
+    let s = b[i];
+    for (let j = 0; j < in_dim; j++) s += W[i * in_dim + j] * x[j];
+    out[i] = s;
+  }
+  return out;
+}
+
+function inferWithWeights(W, state, spec) {
+  // EmbodimentEncoder: spec(5) → emb(32)
+  let x = mv(W.encoder_net_0_weight, W.encoder_net_0_bias, spec, 32, 5);
+  x = relu(x);
+  x = mv(W.encoder_net_2_weight, W.encoder_net_2_bias, x, 32, 32);
+  const emb = relu(x);
+  // SharedBackbone: [state(10)+emb(32)] → latent(64)
+  const inp = [...state, ...emb];
+  let h = mv(W.backbone_net_0_weight, W.backbone_net_0_bias, inp, 128, 42);
+  h = relu(h);
+  h = mv(W.backbone_net_2_weight, W.backbone_net_2_bias, h, 128, 128);
+  h = relu(h);
+  const lat = relu(mv(W.backbone_net_4_weight, W.backbone_net_4_bias, h, 64, 128));
+  // ActionExpert: latent(64) → action(8)
+  let a = mv(W.expert_net_0_weight, W.expert_net_0_bias, lat, 32, 64);
+  a = relu(a);
+  a = mv(W.expert_net_2_weight, W.expert_net_2_bias, a, 8, 32);
+  return tanhArr(a);
+}
+
+function makeRandomWeights() {
+  // Simulate poorly-trained (scratch) weights.
+  // PyTorch default init (Kaiming uniform) scale: sqrt(1/fan_in)
+  // This ensures activations survive ReLU layers and produce noisy motion.
+  function kaimingArr(n, fan_in) {
+    const scale = Math.sqrt(1.0 / fan_in);
+    return Array.from({ length: n }, () => (Math.random() * 2 - 1) * scale);
+  }
+  return {
+    encoder_net_0_weight:  kaimingArr(32 * 5,   5),   encoder_net_0_bias:  kaimingArr(32,  5),
+    encoder_net_2_weight:  kaimingArr(32 * 32,  32),  encoder_net_2_bias:  kaimingArr(32,  32),
+    backbone_net_0_weight: kaimingArr(128 * 42, 42),  backbone_net_0_bias: kaimingArr(128, 42),
+    backbone_net_2_weight: kaimingArr(128 * 128,128), backbone_net_2_bias: kaimingArr(128, 128),
+    backbone_net_4_weight: kaimingArr(64 * 128, 128), backbone_net_4_bias: kaimingArr(64,  128),
+    expert_net_0_weight:   kaimingArr(32 * 64,  64),  expert_net_0_bias:   kaimingArr(32,  64),
+    expert_net_2_weight:   kaimingArr(8 * 32,   32),  expert_net_2_bias:   kaimingArr(8,   32),
+  };
+}
+
+// Fallback: pure math (for demo when no weights loaded)
+function syntheticMermaidAction(t, task, side) {
+  const freq  = 2.2;
+  const phase = t * freq + (side === -1 ? 0 : 0.4);  // slight phase offset for B
+  const water = currentWaterDepth;
+  const blend = water;
+  const noise = side === 1 ? 0.12 : 0.0;  // B has noise to simulate poor init
+
+  const arm_l  = -Math.sin(phase) * 0.28 * (1 - blend * 0.6) + (Math.random() - 0.5) * noise;
+  const arm_r  =  Math.sin(phase) * 0.28 * (1 - blend * 0.6) + (Math.random() - 0.5) * noise;
+  const torso  =  Math.sin(phase * 2) * 0.04;
+  const bob    =  Math.abs(Math.sin(phase)) * 0.02 * (1 - blend);
+  const amp_t  = (task === 1) ? 0.55 : (task === 2 ? 0.30 : 0.05);
+  const tail_m =  Math.sin(phase - 0.5) * amp_t * blend + (Math.random() - 0.5) * noise * 0.5;
+  const tail_t =  Math.sin(phase - 1.0) * amp_t * blend + (Math.random() - 0.5) * noise * 0.5;
+  const hip_p  =  Math.sin(phase) * amp_t * 0.5 * blend;
+  const roll   =  Math.sin(phase * 0.5) * 0.03;
+
+  return [arm_l, arm_r, torso, bob, tail_m, tail_t, hip_p, roll];
+}
+
+// ============================================================
+// Apply action to character
+// ============================================================
+function applyAction(mermaid, action, t) {
+  const [arm_l, arm_r, torso_r, bob, tail_mid, tail_tip, hip_pitch, roll] = action;
+
+  mermaid.lArm.rotation.x = arm_l;
+  mermaid.rArm.rotation.x = arm_r;
+  mermaid.torso.rotation.z = torso_r;
+  mermaid.head.rotation.y  = Math.sin(t * 0.4) * 0.06;
+
+  // Hair sway
+  mermaid.hair.rotation.x = hip_pitch * 0.3;
+
+  // Hip undulation
+  mermaid.hipGroup.rotation.x = hip_pitch;
+  mermaid.hipGroup.rotation.z = roll;
+
+  // Spine wave — distribute tail_mid and tail_tip across segments
+  const segCount = mermaid.segs.length;
+  for (let i = 0; i < segCount; i++) {
+    const s  = i / (segCount - 1);
+    const a  = 0.06 + (Math.abs(tail_tip) - 0.06) * s * s;
+    const ph = tail_mid * (1 - s) + tail_tip * s;
+    mermaid.segs[i].rotation.y = ph * 1.2;
+  }
+
+  // Vertical bob
+  mermaid.root.position.y = 0.9 + bob * 0.8;
+
+  // Body tilt: smoothly rotate toward target (horizontal when swimming)
+  // Use globally interpolated currentBodyTilt
+  mermaid.root.rotation.x = -currentBodyTilt;
+}
+
+// ============================================================
+// State / Spec for inference
+// ============================================================
+const SPEC_MERMAID = new Float32Array([0.55, 0.2, 1.0, 0.7, 0.5]);
+
+let currentTask       = 0;
+let currentWaterDepth = 0.5;
+let targetBodyTilt    = 0.0;  // radians: 0=upright, PI/2=horizontal
+let currentBodyTilt   = 0.0;  // smoothly interpolated
+
+function setTask(t) {
+  currentTask = t;
+  currentWaterDepth = t === 0 ? 0.1 : t === 1 ? 0.95 : 0.45;
+  waterSurf.position.y = t === 1 ? 3.5 : 2.2;
+  // Body tilt: 0=upright, 1=horizontal(swimming), 2=slight tilt
+  targetBodyTilt = t === 0 ? 0.0 : t === 1 ? Math.PI * 0.48 : Math.PI * 0.22;
+  document.querySelectorAll('.mbtn').forEach((b, i) => {
+    b.classList.toggle('active', i === t);
+  });
+}
+
+function makeState(t, phase) {
+  return new Float32Array([
+    0.3 + 0.4 * Math.abs(Math.sin(t * 0.3)),
+    Math.cos(t * 0.4),
+    Math.sin(t * 0.4),
+    Math.sin(phase),
+    Math.cos(phase),
+    0.6,
+    currentWaterDepth,
+    0.0,
+    0.2 + currentTask * 0.4,
+    0.0,
+  ]);
+}
+
+// ============================================================
+// Weights loading — drag & drop + file picker
+// ============================================================
+const overlay  = document.getElementById('drop-overlay');
+const dropHint = document.getElementById('drop-hint');
+let dragCounter = 0;  // track enter/leave pairs to avoid canvas flickering
+
+function loadWeightsFromFile(file, side) {
+  // side: 'A' or 'B'
+  if (!file) return;
+  if (!file.name.endsWith('.json')) {
+    dropHint.textContent = 'エラー: .json ファイルを選択してください';
+    return;
+  }
+  const reader = new FileReader();
+  reader.onload = ev => {
+    try {
+      const raw = JSON.parse(ev.target.result);
+      const w = {};
+      for (const k in raw) w[k] = new Float32Array(raw[k]);
+      if (side === 'A') {
+        weightsA = w;
+        document.getElementById('box-a').style.borderColor = '#4a9eff';
+      } else {
+        weightsB = w;
+        document.getElementById('box-b').style.borderColor = '#ff6b6b';
+      }
+      const loadedA = weightsA ? '✓A' : '—A';
+      const loadedB = weightsB ? '✓B' : '—B';
+      dropHint.textContent = `${loadedA} ${loadedB} — ${file.name} 読み込み完了`;
+      dropHint.classList.add('loaded');
+      if (weightsA && weightsB) overlay.classList.remove('visible');
+    } catch(err) {
+      dropHint.textContent = `エラー: JSON解析失敗 (${err.message})`;
+    }
+  };
+  reader.readAsText(file);
+}
+
+// File pickers
+document.getElementById('file-input-a').addEventListener('change', e => {
+  loadWeightsFromFile(e.target.files[0], 'A');
+});
+document.getElementById('file-input-b').addEventListener('change', e => {
+  loadWeightsFromFile(e.target.files[0], 'B');
+});
+
+// Drag & drop — use dragenter/dragleave counter to avoid flicker
+document.addEventListener('dragenter', e => {
+  e.preventDefault();
+  dragCounter++;
+  overlay.classList.add('visible');
+});
+document.addEventListener('dragleave', e => {
+  dragCounter--;
+  if (dragCounter <= 0) {
+    dragCounter = 0;
+    overlay.classList.remove('visible');
+  }
+});
+document.addEventListener('dragover', e => {
+  e.preventDefault();  // required to allow drop
+});
+document.addEventListener('drop', e => {
+  e.preventDefault();
+  dragCounter = 0;
+  const file = e.dataTransfer.files[0];
+  // Auto-detect A or B from filename
+  const side = file && file.name.toLowerCase().includes('_b') ? 'B' : 'A';
+  loadWeightsFromFile(file, side);
+});
+
+// ============================================================
+// Render loop
+// ============================================================
+let phase = 0;
+const clock = new THREE.Clock();
+
+function animate() {
+  requestAnimationFrame(animate);
+  const t  = clock.getElapsedTime();
+  phase += 2.2 * 0.016;
+
+  const W = wrap.clientWidth;
+  const H = wrap.clientHeight;
+
+  const state = makeState(t, phase);
+
+  // --- Compute actions ---
+  let actionA, actionB;
+
+  if (weightsA && weightsB) {
+    // Both loaded: real A/B comparison
+    actionA = inferWithWeights(weightsA, state, SPEC_MERMAID);
+    actionB = inferWithWeights(weightsB, state, SPEC_MERMAID);
+  } else if (weightsA) {
+    // Only A loaded
+    actionA = inferWithWeights(weightsA, state, SPEC_MERMAID);
+    actionB = syntheticMermaidAction(t, currentTask, 1);
+  } else {
+    // Nothing loaded: synthetic preview
+    actionA = syntheticMermaidAction(t, currentTask, -1);
+    actionB = syntheticMermaidAction(t, currentTask,  1);
+  }
+
+  // Smoothly interpolate body tilt (easing)
+  currentBodyTilt += (targetBodyTilt - currentBodyTilt) * 0.04;
+
+  // Camera: side view when swimming, front view otherwise
+  // task===1: camera moves to side (X axis), looks from Z=0
+  const camTargetX = currentTask === 1 ? 6.5 : 0;
+  const camTargetZ = currentTask === 1 ? 0.5 : 7.0;
+  const camTargetY = currentTask === 1 ? 0.6 : 1.4;
+  camera.position.x += (camTargetX - camera.position.x) * 0.04;
+  camera.position.z += (camTargetZ - camera.position.z) * 0.04;
+  camera.position.y += (camTargetY - camera.position.y) * 0.04;
+  camera.lookAt(0, currentTask === 1 ? 0.3 : 0.8, 0);
+
+  // Rotate mermaids 90deg around Y so side view shows the swimming direction
+  const targetYRot = currentTask === 1 ? Math.PI * 0.5 : 0;
+  mermaidA.root.rotation.y += (targetYRot - mermaidA.root.rotation.y) * 0.04;
+  mermaidB.root.rotation.y += (targetYRot - mermaidB.root.rotation.y) * 0.04;
+
+  // Spread mermaids apart on Z axis for side view (else they overlap)
+  const spreadZ = currentTask === 1 ? 1.6 : 0;
+  mermaidA.root.position.z += ( spreadZ - mermaidA.root.position.z) * 0.04;
+  mermaidB.root.position.z += (-spreadZ - mermaidB.root.position.z) * 0.04;
+
+  applyAction(mermaidA, actionA, t);
+  applyAction(mermaidB, actionB, t);
+
+  // --- Left viewport (A) ---
+  renderer.setViewport(0, 0, W / 2, H);
+  renderer.setScissor(0, 0, W / 2, H);
+  camera.setViewOffset(W, H, 0, 0, W / 2, H);
+  renderer.render(scene, camera);
+
+  // --- Right viewport (B) ---
+  renderer.setViewport(W / 2, 0, W / 2, H);
+  renderer.setScissor(W / 2, 0, W / 2, H);
+  camera.setViewOffset(W, H, W / 2, 0, W / 2, H);
+  renderer.render(scene, camera);
+
+  camera.clearViewOffset();
+
+  // --- Update stats ---
+  const fmt = v => v.toFixed(3);
+  document.getElementById('s-arm-a').textContent  = fmt(actionA[0]);
+  document.getElementById('s-arm-b').textContent  = fmt(actionB[0]);
+  document.getElementById('s-tail-a').textContent = fmt(actionA[4]);
+  document.getElementById('s-tail-b').textContent = fmt(actionB[4]);
+  document.getElementById('s-ttip-a').textContent = fmt(actionA[5]);
+  document.getElementById('s-ttip-b').textContent = fmt(actionB[5]);
+  document.getElementById('s-hip-a').textContent  = fmt(actionA[6]);
+  document.getElementById('s-hip-b').textContent  = fmt(actionB[6]);
+  document.getElementById('s-wd').textContent     = currentWaterDepth.toFixed(2);
+  document.getElementById('s-ph').textContent     = (phase % (Math.PI * 2)).toFixed(2);
+}
+
+resize();
+window.addEventListener('resize', resize);
+animate();
+</script>
+</body>
+</html>
