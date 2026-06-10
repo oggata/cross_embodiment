@@ -241,5 +241,8 @@ Backboneが文脈を理解しているかどうかが試される、最も技術
 - [π₀ (Physical Intelligence)](https://www.physicalintelligence.company/blog/pi0)
 - [RT-2 (Google DeepMind)](https://robotics-transformer2.github.io/)
 - [Body Caudal Propulsion モデル — Lighthill (1960)](https://royalsocietypublishing.org/doi/10.1098/rspa.1960.0133)
+- [demo1](https://oggata.github.io/cross_embodiment/index.html)
+- [demo2](https://oggata.github.io/cross_embodiment/check.html)
+
 
 
